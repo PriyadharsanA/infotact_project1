@@ -81,9 +81,12 @@ def hybrid_recommend(user_id, predicted_df, movies_df, user_item_df, cosine_sim,
     movie_ids = movies_df.iloc[movie_idxs[top_idx]]['movie_id']
     return movies_df[movies_df['movie_id'].isin(movie_ids)][['movie_id', 'movie_title']].reset_index(drop=True)
 
+import urllib.parse
+
 def fetch_movie_poster(title):
-    # Placeholder image
-    return f"https://via.placeholder.com/150?text={'+'.join(title.split())}"
+    encoded_title = urllib.parse.quote_plus(title)
+    return f"https://via.placeholder.com/150x220.png?text={encoded_title}"
+
 
 def display_movies(df):
     for _, row in df.iterrows():
