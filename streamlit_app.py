@@ -7,43 +7,42 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.decomposition import TruncatedSVD
 
 # ----------------------------
-# Load shared user data
+# Caching-heavy operations
 # ----------------------------
-with open('shared_data.pkl', 'rb') as f:
-    shared_data = pickle.load(f)
+@st.cache_data
+def load_data():
+    movies = pd.read_csv("movies.csv")
+    ratings = pd.read_csv("ratings.csv")
+    return movies, ratings
 
-st.set_page_config(page_title="Movie Recommender", layout="centered")
-st.markdown("<h1 style='text-align:center; color:#ff4b4b;'>🎬 Movie Recommendation System</h1>", unsafe_allow_html=True)
-st.markdown("---")
+@st.cache_data
+def preprocess_movies(movies):
+    movies['clean_movie_title'] = movies['movie_title'].astype(str).str.replace(r'\(\d{4}\)', '', regex=True).str.strip()
+    return movies
 
-st.write(f"User ID passed from notebook: {shared_data['user_id']}")
+@st.cache_data
+def compute_tfidf(clean_titles):
+    tfidf = TfidfVectorizer(stop_words='english')
+    tfidf_matrix = tfidf.fit_transform(clean_titles)
+    cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
+    return cosine_sim
+
+@st.cache_data
+def compute_user_item_matrix(ratings):
+    return ratings.pivot_table(index='user_id', columns='movie_id', values='user_rating').fillna(0)
+
+@st.cache_data
+def compute_svd_matrix(user_item_matrix):
+    svd = TruncatedSVD(n_components=50, random_state=42)
+    user_features = svd.fit_transform(user_item_matrix)
+    item_features = svd.components_
+    predicted_df = pd.DataFrame(np.dot(user_features, item_features), index=user_item_matrix.index, columns=user_item_matrix.columns)
+    return predicted_df
 
 # ----------------------------
-# Load and preprocess data
+# Recommendation Logic
 # ----------------------------
-movies = pd.read_csv("movies.csv")
-ratings = pd.read_csv("ratings.csv")
-
-movies['clean_movie_title'] = movies['movie_title'].astype(str).str.replace(r'\(\d{4}\)', '', regex=True).str.strip()
-
-# Content-based vectorization
-tfidf = TfidfVectorizer(stop_words='english')
-tfidf_matrix = tfidf.fit_transform(movies['clean_movie_title'])
-cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
-
-title_to_index = pd.Series(movies.index, index=movies['clean_movie_title'].str.lower())
-
-# Collaborative filtering
-user_item_matrix = ratings.pivot_table(index='user_id', columns='movie_id', values='user_rating').fillna(0)
-svd = TruncatedSVD(n_components=50, random_state=42)
-user_features = svd.fit_transform(user_item_matrix)
-item_features = svd.components_
-predicted_df = pd.DataFrame(np.dot(user_features, item_features), index=user_item_matrix.index, columns=user_item_matrix.columns)
-
-# ----------------------------
-# Recommendation Functions
-# ----------------------------
-def get_content_recommendations(title, n=10):
+def get_content_recommendations(title, title_to_index, cosine_sim, movies, n=10):
     title = title.lower()
     if title not in title_to_index:
         return pd.DataFrame(columns=["movie_id", "movie_title"])
@@ -65,7 +64,7 @@ def recommend_svd(user_id, predicted_df, movies_df, user_item_df, n=5):
     recs = movies_df[movies_df['movie_id'].isin(top_ids)][['movie_id', 'movie_title']]
     return recs.set_index('movie_id').loc[top_ids].reset_index()
 
-def hybrid_recommend(user_id, predicted_df, movies_df, user_item_df, tfidf_sim=cosine_sim, n=5):
+def hybrid_recommend(user_id, predicted_df, movies_df, user_item_df, cosine_sim, n=5):
     if user_id not in predicted_df.index:
         return pd.DataFrame(columns=["movie_id", "movie_title"])
     user_row = predicted_df.loc[user_id]
@@ -76,16 +75,14 @@ def hybrid_recommend(user_id, predicted_df, movies_df, user_item_df, tfidf_sim=c
     if unrated.empty:
         return pd.DataFrame(columns=["movie_id", "movie_title"])
     top_svd_ids = unrated.nlargest(30).index
-    movie_idxs = movies[movies['movie_id'].isin(top_svd_ids)].index.to_numpy()
-    sim_avg = tfidf_sim[movie_idxs].mean(axis=1)
+    movie_idxs = movies_df[movies_df['movie_id'].isin(top_svd_ids)].index.to_numpy()
+    sim_avg = cosine_sim[movie_idxs].mean(axis=1)
     top_idx = sim_avg.argsort()[::-1][:n]
-    movie_ids = movies.iloc[movie_idxs[top_idx]]['movie_id']
-    return movies[movies['movie_id'].isin(movie_ids)][['movie_id', 'movie_title']].reset_index(drop=True)
+    movie_ids = movies_df.iloc[movie_idxs[top_idx]]['movie_id']
+    return movies_df[movies_df['movie_id'].isin(movie_ids)][['movie_id', 'movie_title']].reset_index(drop=True)
 
-# ----------------------------
-# Helper functions
-# ----------------------------
 def fetch_movie_poster(title):
+    # Placeholder image
     return f"https://via.placeholder.com/150?text={'+'.join(title.split())}"
 
 def display_movies(df):
@@ -98,10 +95,29 @@ def display_movies(df):
         st.markdown("---")
 
 # ----------------------------
+# App Initialization
+# ----------------------------
+with open('shared_data.pkl', 'rb') as f:
+    shared_data = pickle.load(f)
+
+st.set_page_config(page_title="Fast Movie Recommender", layout="centered")
+st.markdown("<h1 style='text-align:center; color:#ff4b4b;'>⚡ Fast Movie Recommendation System</h1>", unsafe_allow_html=True)
+st.markdown("---")
+st.write(f"User ID passed from notebook: {shared_data['user_id']}")
+
+# Load and prepare everything
+movies, ratings = load_data()
+movies = preprocess_movies(movies)
+cosine_sim = compute_tfidf(movies['clean_movie_title'])
+user_item_matrix = compute_user_item_matrix(ratings)
+predicted_df = compute_svd_matrix(user_item_matrix)
+
+title_to_index = pd.Series(movies.index, index=movies['clean_movie_title'].str.lower())
+
+# ----------------------------
 # Streamlit UI
 # ----------------------------
 option = st.radio("Choose Recommendation Type", ['Content-Based', 'SVD (Collaborative)', 'Hybrid'], horizontal=True)
-
 movie_input = st.text_input("Enter a movie title (for content-based):")
 user_input = st.number_input("Enter User ID (for SVD/Hybrid):", min_value=1, step=1)
 
@@ -111,7 +127,7 @@ if st.button("Recommend"):
             st.warning("Please enter a movie title.")
         else:
             st.subheader("Recommendations (Content-Based):")
-            recs = get_content_recommendations(movie_input)
+            recs = get_content_recommendations(movie_input, title_to_index, cosine_sim, movies)
             if recs.empty:
                 st.info("No recommendations found for the entered movie title.")
             else:
@@ -133,7 +149,7 @@ if st.button("Recommend"):
             st.warning("User ID not found in the dataset.")
         else:
             st.subheader("Recommendations (Hybrid):")
-            recs = hybrid_recommend(user_input, predicted_df, movies, user_item_matrix)
+            recs = hybrid_recommend(user_input, predicted_df, movies, user_item_matrix, cosine_sim)
             if recs.empty:
                 st.info("No hybrid recommendations could be generated for this user.")
             else:
