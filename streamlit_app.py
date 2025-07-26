@@ -101,4 +101,57 @@ def display_movies(df):
 with open('shared_data.pkl', 'rb') as f:
     shared_data = pickle.load(f)
 
-st.set_page_config(page_title="Fast Movi_
+st.set_page_config(page_title="Fast Movie Recommender", layout="centered")
+st.markdown("<h1 style='text-align:center; color:#ff4b4b;'>⚡ Fast Movie Recommendation System</h1>", unsafe_allow_html=True)
+st.markdown("---")
+st.write(f"User ID passed from notebook: {shared_data['user_id']}")
+
+# Load and prepare everything
+movies, ratings = load_data()
+movies = preprocess_movies(movies)
+cosine_sim = compute_tfidf(movies['clean_movie_title'])
+user_item_matrix = compute_user_item_matrix(ratings)
+predicted_df = compute_svd_matrix(user_item_matrix)
+
+title_to_index = pd.Series(movies.index, index=movies['clean_movie_title'].str.lower())
+
+# ----------------------------
+# Streamlit UI
+# ----------------------------
+option = st.radio("Choose Recommendation Type", ['Content-Based', 'SVD (Collaborative)', 'Hybrid'], horizontal=True)
+movie_input = st.text_input("Enter a movie title (for content-based):")
+user_input = st.number_input("Enter User ID (for SVD/Hybrid):", min_value=1, step=1)
+
+if st.button("Recommend"):
+    if option == 'Content-Based':
+        if not movie_input:
+            st.warning("Please enter a movie title.")
+        else:
+            st.subheader("Recommendations (Content-Based):")
+            recs = get_content_recommendations(movie_input, title_to_index, cosine_sim, movies)
+            if recs.empty:
+                st.info("No recommendations found for the entered movie title.")
+            else:
+                display_movies(recs)
+
+    elif option == 'SVD (Collaborative)':
+        if user_input not in user_item_matrix.index:
+            st.warning("User ID not found in the dataset.")
+        else:
+            st.subheader("Recommendations (Collaborative - SVD):")
+            recs = recommend_svd(user_input, predicted_df, movies, user_item_matrix)
+            if recs.empty:
+                st.info("No collaborative recommendations could be generated for this user.")
+            else:
+                display_movies(recs)
+
+    else:  # Hybrid
+        if user_input not in user_item_matrix.index:
+            st.warning("User ID not found in the dataset.")
+        else:
+            st.subheader("Recommendations (Hybrid):")
+            recs = hybrid_recommend(user_input, predicted_df, movies, user_item_matrix, cosine_sim)
+            if recs.empty:
+                st.info("No hybrid recommendations could be generated for this user.")
+            else:
+                display_movies(recs)
